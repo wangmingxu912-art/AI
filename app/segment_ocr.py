@@ -81,9 +81,9 @@ def detect_question_bboxes_by_ocr(page_png: Path, *, cfg: OCRSegmentConfig | Non
             return []
         return []
 
-    # Build line-level text and bounding box from OCR words
-    # group by (block_num, par_num, line_num) if present; otherwise fallback to y-banding.
-    words: list[tuple[int, int, int, int, int, str, int, int, int]] = []
+    # Build line-level text from OCR words across the whole line.
+    # Important: we must include the right-side printed stem text; otherwise the top line becomes just "1".
+    words: list[tuple[int, int, int, int, int, int, int]] = []  # block,par,line,x,y,w,h,idx
     n = len(data.get("text", []))
     for i in range(n):
         txt = (data["text"][i] or "").strip()
@@ -101,13 +101,11 @@ def detect_question_bboxes_by_ocr(page_png: Path, *, cfg: OCRSegmentConfig | Non
         h = int(data["height"][i])
         if h < c.min_word_height:
             continue
-        if x > int(aw * c.left_margin_frac):
-            continue
 
         block = int(data.get("block_num", [0] * n)[i] or 0)
         par = int(data.get("par_num", [0] * n)[i] or 0)
         line = int(data.get("line_num", [0] * n)[i] or 0)
-        words.append((block, par, line, x, y, w, h, conf, i))
+        words.append((block, par, line, x, y, w, h, i))
 
     if not words:
         return []
@@ -115,9 +113,9 @@ def detect_question_bboxes_by_ocr(page_png: Path, *, cfg: OCRSegmentConfig | Non
     # Map word index -> text for quick lookup
     texts = data["text"]
 
-    # group
-    groups: dict[tuple[int, int, int], list[tuple[int, int, int, int]]] = {}
-    for block, par, line, x, y, w, h, conf, idx in words:
+    # group by line
+    groups: dict[tuple[int, int, int], list[tuple[int, int, int, int, int]]] = {}
+    for block, par, line, x, y, w, h, idx in words:
         key = (block, par, line)
         groups.setdefault(key, []).append((x, y, w, h, idx))
 
@@ -126,21 +124,28 @@ def detect_question_bboxes_by_ocr(page_png: Path, *, cfg: OCRSegmentConfig | Non
         items.sort(key=lambda t: t[0])
         x0 = min(t[0] for t in items)
         y0 = min(t[1] for t in items)
-        # Join line text
+        # Join line text (entire line)
         line_text = " ".join((texts[t[4]] or "").strip() for t in items).strip()
         if not line_text:
             continue
 
-        # Decide if the line *starts* with a main question label.
+        # Only consider lines whose FIRST token is near the left margin (question number column).
+        # This filters out marks like "[2 marks]" elsewhere on the page.
+        first_x = items[0][0]
+        if first_x > int(aw * c.left_margin_frac):
+            continue
+
+        # Decide if the line *starts* with a main question label (Q1/Q2/Question 3/1./1)).
         # We only create one bbox per main question number (Q1, Q2...), not per (a)(b) subpart.
         m = _LINE_START_RE.match(line_text)
         if not m:
             continue
         num = m.group("num")
         rest = (m.group("rest") or "").strip()
-        # Filter out likely "step numbers": if there's no rest text at all, ignore.
-        # Question lines usually have some text following the number (or immediately "(a) ...").
-        if not rest:
+        # Filter out likely "step numbers": if there's no rest and line is basically just a number, ignore.
+        # For true questions, the line usually has stem text (like your example) so rest will be non-empty.
+        # But OCR might split punctuation; allow if line has multiple tokens even if rest looks empty.
+        if not rest and len(items) <= 1:
             continue
 
         # Validate the label itself (e.g., "1", "Q2", "Question 3")
