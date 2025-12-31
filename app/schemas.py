@@ -71,3 +71,17 @@ class GradeResponse(BaseModel):
     questions: list[GradeQuestionOut]
     raw: dict[str, Any] = Field(default_factory=dict)
 
+
+class AutoQuestion(BaseModel):
+    id: str
+    page_index: int
+    bbox: BBoxModel
+    cropped_image_url: str
+    cropped_width: int
+    cropped_height: int
+
+
+class AutoQuestionsResponse(BaseModel):
+    exam_id: str
+    questions: list[AutoQuestion]
+

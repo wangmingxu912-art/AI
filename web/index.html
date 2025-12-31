@@ -11,7 +11,7 @@
       <div class="container">
         <h1 class="title">AQA A-Level 手写 PDF 自动评分</h1>
         <p class="subtitle">
-          流程：上传 PDF → 每页渲染成图片 → 框选每题答案区域 → 调用 GPT-5.2（thinking）评分 → 在裁剪图上叠加错误框 → 输出总分
+          流程：上传 PDF → 每页渲染成图片 → 自动识别连续题目答案块 → 调用 GPT-5.2（thinking）评分 → 在裁剪图上叠加错误框 → 输出总分
         </p>
       </div>
     </header>
@@ -27,39 +27,35 @@
       </section>
 
       <section class="card">
-        <h2>2) 框选题目答案区域（BBox）并添加题目</h2>
+        <h2>2) 自动识别题目（连续答案块）并添加满分/评分标准</h2>
         <div class="grid2">
           <div>
-            <div id="pagesRoot" class="pages"></div>
+            <div class="row space">
+              <div class="status" style="margin:0">上传后点击“自动识别题目”生成 Q1、Q2…</div>
+              <button id="autoBtn" class="btn secondary">自动识别题目</button>
+            </div>
+            <div id="pagesRoot" class="pages" style="margin-top:12px"></div>
           </div>
           <div>
             <div class="form">
               <label>
-                题号（例如 Q1、Q2a）
-                <input id="qId" type="text" placeholder="Q1" />
+                默认满分（会应用到所有自动题目，可在下方逐题修改）
+                <input id="defaultMax" type="number" step="0.5" min="0" value="1" />
               </label>
               <label>
-                满分（marks）
-                <input id="qMax" type="number" step="0.5" min="0" value="1" />
+                题干（可选；如果各题不同，请逐题填写）
+                <textarea id="globalQText" rows="4" placeholder="粘贴 question text..."></textarea>
               </label>
               <label>
-                题干（可选，但建议粘贴）
-                <textarea id="qText" rows="4" placeholder="粘贴 question text..."></textarea>
+                评分标准 / mark scheme（可选；如果各题不同，请逐题填写）
+                <textarea id="globalMs" rows="6" placeholder="粘贴 mark scheme..."></textarea>
               </label>
-              <label>
-                评分标准 / mark scheme（可选，但建议粘贴）
-                <textarea id="qMs" rows="6" placeholder="粘贴 mark scheme..."></textarea>
-              </label>
-              <div class="row">
-                <button id="addQuestionBtn" class="btn secondary">添加该题（使用当前框选）</button>
-                <button id="clearSelBtn" class="btn ghost">清除框选</button>
-              </div>
-              <div id="selInfo" class="status"></div>
+              <div id="selInfo" class="status">不再需要手动框选。</div>
             </div>
 
             <div class="questions">
               <div class="row space">
-                <h3>已添加的题目</h3>
+                <h3>已识别的题目</h3>
                 <button id="gradeBtn" class="btn">开始评分</button>
               </div>
               <div id="questionsList" class="list"></div>

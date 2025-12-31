@@ -11,7 +11,10 @@ from fastapi.staticfiles import StaticFiles
 from .grader import grade_with_gpt52
 from .image_ops import BBox, crop_image, is_blank_image
 from .pdf_render import render_pdf_to_png_pages
+from .segment import detect_answer_blocks
 from .schemas import (
+    AutoQuestion,
+    AutoQuestionsResponse,
     GradeQuestionOut,
     GradeRequest,
     GradeResponse,
@@ -83,6 +86,53 @@ def get_crop_png(exam_id: str, crop_name: str) -> FileResponse:
     if not png_path.exists():
         raise HTTPException(status_code=404, detail="Crop not found")
     return FileResponse(str(png_path), media_type="image/png")
+
+
+@app.post("/api/exams/{exam_id}/auto_questions", response_model=AutoQuestionsResponse)
+async def auto_questions(exam_id: str) -> AutoQuestionsResponse:
+    """
+    Auto-detect contiguous answer blocks across all pages, assign Q1..Qn in order.
+    No manual bbox selection required.
+    """
+    paths = get_exam_paths(exam_id)
+    if not paths.pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    # Make sure pages are rendered (if user calls this directly)
+    if not paths.pages_dir.exists() or not any(paths.pages_dir.glob("*.png")):
+        render_pdf_to_png_pages(paths.pdf_path, paths.pages_dir, dpi=200)
+
+    questions: list[AutoQuestion] = []
+    qn = 1
+
+    # Iterate in page index order
+    page_paths = sorted(paths.pages_dir.glob("page_*.png"))
+    for page_path in page_paths:
+        # parse page index from filename: page_0000.png
+        try:
+            page_index = int(page_path.stem.split("_")[1])
+        except Exception:
+            continue
+
+        bboxes = detect_answer_blocks(page_path)
+        for bbox in bboxes:
+            qid = f"Q{qn}"
+            crop_name = f"auto_{qid}__p{page_index}"
+            crop_path = paths.crops_dir / f"{crop_name}.png"
+            cw, ch = crop_image(page_path, bbox, crop_path)
+            questions.append(
+                AutoQuestion(
+                    id=qid,
+                    page_index=page_index,
+                    bbox={"x": bbox.x, "y": bbox.y, "w": bbox.w, "h": bbox.h},
+                    cropped_image_url=f"/api/exams/{exam_id}/crops/{crop_name}.png",
+                    cropped_width=cw,
+                    cropped_height=ch,
+                )
+            )
+            qn += 1
+
+    return AutoQuestionsResponse(exam_id=exam_id, questions=questions)
 
 
 @app.post("/api/exams/{exam_id}/grade", response_model=GradeResponse)

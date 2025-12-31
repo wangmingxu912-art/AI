@@ -3,8 +3,7 @@
 let state = {
   examId: null,
   pages: [], // {page_index, width, height, url}
-  selections: new Map(), // key=page_index -> {bbox, displayScale}
-  questions: [], // {id, page_index, bbox, max_marks, question_text, mark_scheme}
+  questions: [], // {id, page_index, bbox, max_marks, question_text, mark_scheme, subject}
 };
 
 const el = (id) => document.getElementById(id);
@@ -34,11 +33,10 @@ async function uploadPdf() {
   const data = await resp.json();
   state.examId = data.exam_id;
   state.pages = data.pages;
-  state.selections = new Map();
   state.questions = [];
   renderPages();
   renderQuestions();
-  setStatus("uploadStatus", `渲染完成：exam_id=${state.examId}，共 ${state.pages.length} 页`);
+  setStatus("uploadStatus", `渲染完成：exam_id=${state.examId}，共 ${state.pages.length} 页。下一步点击“自动识别题目”。`);
 }
 
 function renderPages() {
@@ -64,7 +62,6 @@ function renderPages() {
     card.appendChild(wrap);
     root.appendChild(card);
 
-    attachCanvasBehavior(canvas, p);
     loadPageIntoCanvas(canvas, p);
   });
 }
@@ -85,119 +82,38 @@ function loadPageIntoCanvas(canvas, page) {
   img.src = page.url;
 }
 
-function drawSelection(canvas) {
-  const pageIndex = Number(canvas.dataset.pageIndex);
-  const sel = state.selections.get(pageIndex);
-  if (!sel) return;
-
-  const ctx = canvas.getContext("2d");
-  // Redraw base image by reloading (cheap enough)
-  // But to avoid flicker, we just draw overlay on current image.
-  const s = sel.displayScale;
-  const r = sel.bbox;
-  ctx.save();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "#6aa6ff";
-  ctx.fillStyle = "rgba(106,166,255,0.16)";
-  ctx.strokeRect(r.x * s, r.y * s, r.w * s, r.h * s);
-  ctx.fillRect(r.x * s, r.y * s, r.w * s, r.h * s);
-  ctx.restore();
-}
-
-function attachCanvasBehavior(canvas, page) {
-  let dragging = false;
-  let start = null;
-
-  function canvasToImageXY(e) {
-    const rect = canvas.getBoundingClientRect();
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
-    const scale = canvas.width / page.width; // display pixels per image pixel
-    const ix = Math.max(0, Math.min(page.width, Math.round(cx / scale)));
-    const iy = Math.max(0, Math.min(page.height, Math.round(cy / scale)));
-    return { ix, iy, scale };
-  }
-
-  canvas.addEventListener("mousedown", (e) => {
-    if (!state.examId) return;
-    dragging = true;
-    const { ix, iy, scale } = canvasToImageXY(e);
-    start = { ix, iy, scale };
-    state.selections.set(page.page_index, {
-      bbox: { x: ix, y: iy, w: 1, h: 1 },
-      displayScale: scale,
-    });
-    setStatus("selInfo", `已在 Page ${page.page_index + 1} 开始框选：起点 (${ix}, ${iy})`);
-  });
-
-  canvas.addEventListener("mousemove", (e) => {
-    if (!dragging || !start) return;
-    const { ix, iy } = canvasToImageXY(e);
-    const x = Math.min(start.ix, ix);
-    const y = Math.min(start.iy, iy);
-    const w = Math.max(1, Math.abs(ix - start.ix));
-    const h = Math.max(1, Math.abs(iy - start.iy));
-    state.selections.set(page.page_index, {
-      bbox: { x, y, w, h },
-      displayScale: start.scale,
-    });
-    // redraw by reloading image and drawing selection after load
-    loadPageIntoCanvas(canvas, page);
-  });
-
-  window.addEventListener("mouseup", () => {
-    if (!dragging || !start) return;
-    dragging = false;
-    const sel = state.selections.get(page.page_index);
-    if (sel) {
-      const r = sel.bbox;
-      setStatus(
-        "selInfo",
-        `当前框选：Page ${page.page_index + 1} bbox = x:${r.x} y:${r.y} w:${r.w} h:${r.h}`
-      );
-    }
-    start = null;
-  });
-}
-
-function addQuestion() {
+async function autoDetectQuestions() {
   if (!state.examId) {
     setStatus("selInfo", "请先上传 PDF", true);
     return;
   }
-  const id = el("qId").value.trim();
-  const max = Number(el("qMax").value);
-  if (!id) {
-    setStatus("selInfo", "请输入题号（例如 Q1）", true);
-    return;
-  }
-  if (!Number.isFinite(max) || max <= 0) {
-    setStatus("selInfo", "满分必须是 > 0 的数字", true);
-    return;
-  }
+  setStatus("selInfo", "自动识别题目中…（按空白行切分连续答案块）");
 
-  // Find the most recent selection (highest page index with a selection)
-  let chosen = null;
-  for (const p of state.pages) {
-    const sel = state.selections.get(p.page_index);
-    if (sel) chosen = { page_index: p.page_index, sel };
-  }
-  if (!chosen) {
-    setStatus("selInfo", "请先在某一页上拖拽框选答案区域", true);
+  const resp = await fetch(`/api/exams/${state.examId}/auto_questions`, { method: "POST" });
+  if (!resp.ok) {
+    const t = await resp.text();
+    setStatus("selInfo", `自动识别失败: ${t}`, true);
     return;
   }
+  const data = await resp.json();
 
-  state.questions.push({
-    id,
-    page_index: chosen.page_index,
-    bbox: chosen.sel.bbox,
-    max_marks: max,
-    question_text: el("qText").value || "",
-    mark_scheme: el("qMs").value || "",
+  const defaultMax = Number(el("defaultMax").value) || 1;
+  const globalQText = el("globalQText").value || "";
+  const globalMs = el("globalMs").value || "";
+
+  state.questions = (data.questions || []).map((q) => ({
+    id: q.id,
+    page_index: q.page_index,
+    bbox: q.bbox,
+    max_marks: defaultMax,
+    question_text: globalQText,
+    mark_scheme: globalMs,
     subject: "AQA A-Level",
-  });
+    _preview: q.cropped_image_url,
+  }));
+
   renderQuestions();
-  setStatus("selInfo", `已添加题目 ${id}（Page ${chosen.page_index + 1}）`);
+  setStatus("selInfo", `已识别 ${state.questions.length} 题（Q1..）。你可以逐题调整满分/评分标准，然后开始评分。`);
 }
 
 function renderQuestions() {
@@ -213,20 +129,42 @@ function renderQuestions() {
         <button class="btn ghost" data-remove="${idx}">移除</button>
       </div>
       <div class="meta mono">bbox x:${r.x} y:${r.y} w:${r.w} h:${r.h}</div>
-      <div class="meta">满分：${q.max_marks}</div>
+      <div class="row" style="margin-top:8px">
+        <label style="margin:0; flex: 1">
+          满分
+          <input data-max="${idx}" type="number" step="0.5" min="0" value="${q.max_marks}" />
+        </label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div class="canvasWrap" style="width: 100%">
+          <img src="${q._preview || ""}" alt="preview" style="max-width:100%; display:block" />
+        </div>
+      </div>
+      <label style="margin-top:10px">
+        题干（可选）
+        <textarea data-qtext="${idx}" rows="3" placeholder="question text...">${(q.question_text || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</textarea>
+      </label>
+      <label>
+        mark scheme（可选）
+        <textarea data-ms="${idx}" rows="4" placeholder="mark scheme...">${(q.mark_scheme || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</textarea>
+      </label>
     `;
     div.querySelector("button[data-remove]")?.addEventListener("click", () => {
       state.questions.splice(idx, 1);
       renderQuestions();
     });
+    div.querySelector(`input[data-max="${idx}"]`)?.addEventListener("input", (e) => {
+      const v = Number(e.target.value);
+      if (Number.isFinite(v) && v >= 0) state.questions[idx].max_marks = v;
+    });
+    div.querySelector(`textarea[data-qtext="${idx}"]`)?.addEventListener("input", (e) => {
+      state.questions[idx].question_text = e.target.value;
+    });
+    div.querySelector(`textarea[data-ms="${idx}"]`)?.addEventListener("input", (e) => {
+      state.questions[idx].mark_scheme = e.target.value;
+    });
     root.appendChild(div);
   });
-}
-
-function clearSelection() {
-  state.selections = new Map();
-  renderPages();
-  setStatus("selInfo", "已清除所有框选");
 }
 
 async function grade() {
@@ -341,7 +279,6 @@ function drawMistakesCanvas(canvas, imgUrl, mistakes) {
 }
 
 el("uploadBtn").addEventListener("click", () => uploadPdf().catch((e) => setStatus("uploadStatus", String(e), true)));
-el("addQuestionBtn").addEventListener("click", () => addQuestion());
-el("clearSelBtn").addEventListener("click", () => clearSelection());
+el("autoBtn").addEventListener("click", () => autoDetectQuestions().catch((e) => setStatus("selInfo", String(e), true)));
 el("gradeBtn").addEventListener("click", () => grade().catch((e) => setStatus("gradeStatus", String(e), true)));
 
