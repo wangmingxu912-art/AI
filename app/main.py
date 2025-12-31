@@ -12,6 +12,7 @@ from .grader import grade_with_gpt52
 from .image_ops import BBox, crop_image, is_blank_image
 from .pdf_render import render_pdf_to_png_pages
 from .segment import detect_answer_blocks
+from .segment_ocr import detect_question_bboxes_by_ocr
 from .schemas import (
     AutoQuestion,
     AutoQuestionsResponse,
@@ -114,23 +115,42 @@ async def auto_questions(exam_id: str) -> AutoQuestionsResponse:
         except Exception:
             continue
 
-        bboxes = detect_answer_blocks(page_path)
-        for bbox in bboxes:
-            qid = f"Q{qn}"
-            crop_name = f"auto_{qid}__p{page_index}"
-            crop_path = paths.crops_dir / f"{crop_name}.png"
-            cw, ch = crop_image(page_path, bbox, crop_path)
-            questions.append(
-                AutoQuestion(
-                    id=qid,
-                    page_index=page_index,
-                    bbox={"x": bbox.x, "y": bbox.y, "w": bbox.w, "h": bbox.h},
-                    cropped_image_url=f"/api/exams/{exam_id}/crops/{crop_name}.png",
-                    cropped_width=cw,
-                    cropped_height=ch,
+        # Prefer OCR-based detection of clear question labels.
+        labeled = detect_question_bboxes_by_ocr(page_path)
+        if labeled:
+            for qid, bbox in labeled:
+                crop_name = f"auto_{qid}__p{page_index}"
+                crop_path = paths.crops_dir / f"{crop_name}.png"
+                cw, ch = crop_image(page_path, bbox, crop_path)
+                questions.append(
+                    AutoQuestion(
+                        id=qid,
+                        page_index=page_index,
+                        bbox={"x": bbox.x, "y": bbox.y, "w": bbox.w, "h": bbox.h},
+                        cropped_image_url=f"/api/exams/{exam_id}/crops/{crop_name}.png",
+                        cropped_width=cw,
+                        cropped_height=ch,
+                    )
                 )
-            )
-            qn += 1
+        else:
+            # Fallback: whitespace-based segmentation (best effort).
+            bboxes = detect_answer_blocks(page_path)
+            for bbox in bboxes:
+                qid = f"Q{qn}"
+                crop_name = f"auto_{qid}__p{page_index}"
+                crop_path = paths.crops_dir / f"{crop_name}.png"
+                cw, ch = crop_image(page_path, bbox, crop_path)
+                questions.append(
+                    AutoQuestion(
+                        id=qid,
+                        page_index=page_index,
+                        bbox={"x": bbox.x, "y": bbox.y, "w": bbox.w, "h": bbox.h},
+                        cropped_image_url=f"/api/exams/{exam_id}/crops/{crop_name}.png",
+                        cropped_width=cw,
+                        cropped_height=ch,
+                    )
+                )
+                qn += 1
 
     return AutoQuestionsResponse(exam_id=exam_id, questions=questions)
 

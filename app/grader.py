@@ -88,7 +88,9 @@ def grade_with_gpt52(
     3) return mistake bounding boxes on the *cropped* image
     """
     if os.environ.get("APP_MOCK_GPT", "").strip().lower() in ("1", "true", "yes"):
-        return mock_grade(image_path=image_path, question_id=question_id, max_marks=max_marks)
+        res = mock_grade(image_path=image_path, question_id=question_id, max_marks=max_marks)
+        res.raw["grading_mode"] = "mock"
+        return res
 
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
@@ -170,6 +172,7 @@ Context:
     except Exception:
         # One retry with stricter instruction
         raw = call_once("IMPORTANT: Return ONLY raw JSON. No markdown, no backticks, no commentary.")
+    raw["grading_mode"] = "openai"
 
     extracted_text = str(raw.get("extracted_text", "") or "")
     score = float(raw.get("score", 0) or 0)

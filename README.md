@@ -37,6 +37,16 @@ export OPENAI_REASONING_EFFORT="high"
 export APP_MOCK_GPT=1
 ```
 
+### 自动识别题目（推荐：按题干编号 OCR 分题）
+
+现在默认会优先用 OCR 识别题干编号（例如 `1`、`2(a)`、`Q3`）来分题；如果 OCR 识别不到，再回退到“按空白行切分连续答案块”的方式。
+
+本地运行如果没有 OCR 依赖，需要安装 tesseract：
+
+```bash
+sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
+```
+
 ### 3) 启动服务
 
 ```bash

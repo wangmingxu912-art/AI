@@ -33,7 +33,7 @@ def crop_image(page_png: Path, bbox: BBox, out_path: Path) -> tuple[int, int]:
         return cropped.width, cropped.height
 
 
-def is_blank_image(png_path: Path, *, white_threshold: int = 245, blank_ratio: float = 0.992) -> bool:
+def is_blank_image(png_path: Path, *, white_threshold: int = 250, blank_ratio: float = 0.998) -> bool:
     """
     Heuristic blank detector: if almost all pixels are near-white, treat as blank.
     """
@@ -49,6 +49,8 @@ def is_blank_image(png_path: Path, *, white_threshold: int = 245, blank_ratio: f
             return True
         whiteish = sum(1 for p in pixels if p >= white_threshold)
         ratio = whiteish / len(pixels)
-        # Guard against "all white" scans
-        return ratio >= blank_ratio
+        mean = stat.mean[0] if stat.mean else 255
+        std = stat.stddev[0] if stat.stddev else 0
+        # Be conservative: only mark blank when it's *extremely* white and low-variance.
+        return (ratio >= blank_ratio) and (mean >= 250) and (std <= 6.0)
 
