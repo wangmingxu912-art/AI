@@ -16,31 +16,43 @@ class OCRSegmentConfig:
     # Only consider labels near left margin (fraction of width)
     left_margin_frac: float = 0.28
     # Minimum confidence for a word to be used
-    min_conf: int = 55
+    min_conf: int = 70
     # Pad around computed question bbox
     pad_x: int = 18
     pad_y: int = 10
+    # Prefer printed question numbers: ignore extremely small OCR boxes
+    min_word_height: int = 10
 
 
-_LABEL_RE = re.compile(
-    r"""
+_MAIN_LABEL_RE = re.compile(
+    r"""(?ix)
     ^
-    (?:Q\s*)?
+    (?:question\s*)?
+    (?:q\s*)?
     (?P<num>\d{1,3})
+    (?:\s*[\.\)]\s*)?
     (?:
-      [\.\)]?
-      (?P<part>[a-z])
+      \(\s*[a-z]\s*\)
     )?
     $
-    """,
-    re.IGNORECASE | re.VERBOSE,
+    """
+)
+
+_LINE_START_RE = re.compile(
+    r"""(?ix)
+    ^
+    (?:question\s*)?
+    (?:q\s*)?
+    (?P<num>\d{1,3})
+    (?:\s*[\.\)]\s*)?
+    (?P<rest>.*)
+    $
+    """
 )
 
 
-def _normalize_label(num: str, part: str | None) -> str:
+def _normalize_label(num: str) -> str:
     n = str(int(num))  # strip leading zeros
-    if part:
-        return f"Q{n}{part.lower()}"
     return f"Q{n}"
 
 
@@ -69,8 +81,11 @@ def detect_question_bboxes_by_ocr(page_png: Path, *, cfg: OCRSegmentConfig | Non
             return []
         return []
 
-    candidates: list[tuple[int, int, int, int, str]] = []  # x,y,w,h,label
-    for i in range(len(data.get("text", []))):
+    # Build line-level text and bounding box from OCR words
+    # group by (block_num, par_num, line_num) if present; otherwise fallback to y-banding.
+    words: list[tuple[int, int, int, int, int, str, int, int, int]] = []
+    n = len(data.get("text", []))
+    for i in range(n):
         txt = (data["text"][i] or "").strip()
         if not txt:
             continue
@@ -80,42 +95,89 @@ def detect_question_bboxes_by_ocr(page_png: Path, *, cfg: OCRSegmentConfig | Non
             conf = 0
         if conf < c.min_conf:
             continue
-
         x = int(data["left"][i])
         y = int(data["top"][i])
         w = int(data["width"][i])
         h = int(data["height"][i])
-
+        if h < c.min_word_height:
+            continue
         if x > int(aw * c.left_margin_frac):
             continue
 
-        # normalize common punctuation around labels
-        txt2 = txt.replace("(", "").replace(")", "").replace(":", "").replace("—", "-").strip()
-        m = _LABEL_RE.match(txt2)
-        if not m:
-            continue
-        label = _normalize_label(m.group("num"), m.group("part"))
-        candidates.append((x, y, w, h, label))
+        block = int(data.get("block_num", [0] * n)[i] or 0)
+        par = int(data.get("par_num", [0] * n)[i] or 0)
+        line = int(data.get("line_num", [0] * n)[i] or 0)
+        words.append((block, par, line, x, y, w, h, conf, i))
 
-    if not candidates:
+    if not words:
         return []
 
-    # Sort top-to-bottom; dedupe close-by repeated detections
-    candidates.sort(key=lambda t: (t[1], t[0]))
-    deduped: list[tuple[int, int, int, int, str]] = []
-    for x, y, w, h, label in candidates:
-        if deduped:
-            px, py, pw, ph, pl = deduped[-1]
-            if label == pl and abs(y - py) < 18:
-                continue
-        deduped.append((x, y, w, h, label))
+    # Map word index -> text for quick lookup
+    texts = data["text"]
+
+    # group
+    groups: dict[tuple[int, int, int], list[tuple[int, int, int, int]]] = {}
+    for block, par, line, x, y, w, h, conf, idx in words:
+        key = (block, par, line)
+        groups.setdefault(key, []).append((x, y, w, h, idx))
+
+    line_candidates: list[tuple[int, int, str]] = []  # y_top, x_left, label(Qn)
+    for key, items in groups.items():
+        items.sort(key=lambda t: t[0])
+        x0 = min(t[0] for t in items)
+        y0 = min(t[1] for t in items)
+        # Join line text
+        line_text = " ".join((texts[t[4]] or "").strip() for t in items).strip()
+        if not line_text:
+            continue
+
+        # Decide if the line *starts* with a main question label.
+        # We only create one bbox per main question number (Q1, Q2...), not per (a)(b) subpart.
+        m = _LINE_START_RE.match(line_text)
+        if not m:
+            continue
+        num = m.group("num")
+        rest = (m.group("rest") or "").strip()
+        # Filter out likely "step numbers": if there's no rest text at all, ignore.
+        # Question lines usually have some text following the number (or immediately "(a) ...").
+        if not rest:
+            continue
+
+        # Validate the label itself (e.g., "1", "Q2", "Question 3")
+        # Create a normalized main question id: Q{num}
+        label = _normalize_label(num)
+        line_candidates.append((y0, x0, label))
+
+    if not line_candidates:
+        return []
+
+    # Sort top-to-bottom, then keep a monotonic increasing main-question sequence to avoid picking "steps".
+    line_candidates.sort(key=lambda t: (t[0], t[1]))
+    filtered_lines: list[tuple[int, int, str]] = []
+    last_num = 0
+    for y0, x0, label in line_candidates:
+        try:
+            num = int(label[1:])
+        except Exception:
+            continue
+        if num < last_num:
+            # skip out-of-order hits
+            continue
+        if num == last_num and filtered_lines:
+            # duplicates on same question number: keep first occurrence only
+            continue
+        filtered_lines.append((y0, x0, label))
+        last_num = num
+
+    if not filtered_lines:
+        return []
 
     # Convert y-stops into question blocks
     inv = 1.0 / scale if scale > 0 else 1.0
     results: list[tuple[str, BBox]] = []
-    for idx, (x, y, w, h, label) in enumerate(deduped):
+    for idx, (y, x, label) in enumerate(filtered_lines):
         y0 = max(0, int(y * inv) - c.pad_y)
-        y1 = oh if idx == len(deduped) - 1 else max(0, int(deduped[idx + 1][1] * inv) - c.pad_y)
+        y1 = oh if idx == len(filtered_lines) - 1 else max(0, int(filtered_lines[idx + 1][0] * inv) - c.pad_y)
         if y1 <= y0:
             continue
         # full width (safer for now)
