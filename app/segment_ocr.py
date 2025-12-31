@@ -58,8 +58,16 @@ def detect_question_bboxes_by_ocr(page_png: Path, *, cfg: OCRSegmentConfig | Non
         aw, ah = int(ow * scale), int(oh * scale)
         im = gray0.resize((aw, ah))
 
-    # Use word-level OCR boxes
-    data = pytesseract.image_to_data(im, output_type=pytesseract.Output.DICT, lang="eng", config="--psm 6")
+    # Use word-level OCR boxes.
+    # If tesseract is not installed, gracefully disable OCR and let callers fallback.
+    try:
+        data = pytesseract.image_to_data(im, output_type=pytesseract.Output.DICT, lang="eng", config="--psm 6")
+    except Exception as e:
+        # pytesseract raises TesseractNotFoundError, but keep this broad to avoid hard failures in prod.
+        msg = str(e).lower()
+        if "tesseract is not installed" in msg or "tesseractnotfounderror" in msg:
+            return []
+        return []
 
     candidates: list[tuple[int, int, int, int, str]] = []  # x,y,w,h,label
     for i in range(len(data.get("text", []))):

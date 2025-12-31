@@ -47,6 +47,8 @@ export APP_MOCK_GPT=1
 sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
 ```
 
+如果你没有 `sudo` 权限，建议直接用 Docker 运行（Dockerfile 已内置安装）。
+
 ### 3) 启动服务
 
 ```bash
