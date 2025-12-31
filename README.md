@@ -29,6 +29,14 @@ export OPENAI_MODEL="gpt-5.2"
 export OPENAI_REASONING_EFFORT="high"
 ```
 
+### （可选）演示模式：不调用 OpenAI，返回假评分/错误框
+
+如果你只是想先确认“上传→渲染→框选→叠加显示→汇总总分”这条链路好不好用，可以开启演示模式：
+
+```bash
+export APP_MOCK_GPT=1
+```
+
 ### 3) 启动服务
 
 ```bash

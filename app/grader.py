@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from openai import OpenAI
+from PIL import Image
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,42 @@ def _json_loads_lenient(s: str) -> dict[str, Any]:
     return json.loads(s2)
 
 
+def mock_grade(
+    *,
+    image_path: Path,
+    question_id: str,
+    max_marks: float,
+) -> GradeResult:
+    """
+    Demo-only grading mode (no API calls).
+    Produces deterministic-ish dummy boxes so you can validate the UI pipeline.
+    """
+    with Image.open(image_path) as im:
+        w, h = im.width, im.height
+
+    # deterministic placements based on question_id
+    seed = sum(ord(c) for c in question_id) % 97
+    bw = max(20, int(w * (0.18 + (seed % 7) * 0.01)))
+    bh = max(18, int(h * (0.06 + (seed % 5) * 0.01)))
+    x1 = min(max(0, int(w * 0.08 + (seed % 9) * 7)), max(0, w - bw - 1))
+    y1 = min(max(0, int(h * 0.18 + (seed % 11) * 9)), max(0, h - bh - 1))
+    x2 = min(max(0, int(w * 0.42 + (seed % 13) * 5)), max(0, w - bw - 1))
+    y2 = min(max(0, int(h * 0.58 + (seed % 17) * 6)), max(0, h - bh - 1))
+
+    score = max(0.0, min(float(max_marks), round(float(max_marks) * 0.6, 2)))
+    mistakes = [
+        {"bbox": {"x": x1, "y": y1, "w": bw, "h": bh}, "label": "demo: wrong step", "severity": "major"},
+        {"bbox": {"x": x2, "y": y2, "w": bw, "h": bh}, "label": "demo: missing unit", "severity": "minor"},
+    ]
+    return GradeResult(
+        extracted_text="(demo mode) handwriting OCR placeholder",
+        score=score,
+        feedback="(demo mode) Returned fake score + mistake boxes for UI testing.",
+        mistakes=mistakes,
+        raw={"demo": True, "question_id": question_id},
+    )
+
+
 def grade_with_gpt52(
     *,
     image_path: Path,
@@ -50,6 +87,9 @@ def grade_with_gpt52(
     2) grade using provided mark scheme / rubric
     3) return mistake bounding boxes on the *cropped* image
     """
+    if os.environ.get("APP_MOCK_GPT", "").strip().lower() in ("1", "true", "yes"):
+        return mock_grade(image_path=image_path, question_id=question_id, max_marks=max_marks)
+
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
