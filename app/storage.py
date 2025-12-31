@@ -15,8 +15,14 @@ class ExamPaths:
     crops_dir: Path
 
 
+def _project_root() -> Path:
+    # /.../app/storage.py -> project root
+    return Path(__file__).resolve().parent.parent
+
+
 def get_data_root() -> Path:
-    return Path(os.environ.get("APP_DATA_DIR", "/workspace/data")).resolve()
+    default_dir = _project_root() / "data"
+    return Path(os.environ.get("APP_DATA_DIR", str(default_dir))).resolve()
 
 
 def new_exam_paths() -> ExamPaths:

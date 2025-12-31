@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -20,7 +21,8 @@ from .schemas import (
 from .storage import ensure_exam_dirs, get_exam_paths, new_exam_paths
 
 
-WEB_DIR = Path("/workspace/web").resolve()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+WEB_DIR = Path(os.environ.get("APP_WEB_DIR", str(PROJECT_ROOT / "web"))).resolve()
 
 app = FastAPI(title="AQA A-Level Handwritten PDF Grader")
 

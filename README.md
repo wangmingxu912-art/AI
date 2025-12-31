@@ -37,6 +37,27 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 然后打开 `http://localhost:8000`。
 
+## 部署到网上（推荐 Docker）
+
+这个项目是“前端静态页 + 后端 FastAPI”同一个服务，**最简单就是用 Docker 部署到 Render / Railway / Fly.io** 这类平台。
+
+### 方式 A：任意支持 Docker 的平台（通用）
+
+- **Build**：使用仓库根目录的 `Dockerfile`
+- **启动**：容器默认会执行 `uvicorn ... --port ${PORT}`（平台会注入 `PORT`）
+- **必须配置的环境变量**：
+  - `OPENAI_API_KEY`
+- **可选环境变量**：
+  - `OPENAI_MODEL`（默认 `gpt-5.2`）
+  - `OPENAI_REASONING_EFFORT`（默认 `high`）
+
+### 方式 B：自己服务器（Docker）
+
+```bash
+docker build -t aqa-grader .
+docker run -p 8000:8000 -e OPENAI_API_KEY="你的key" aqa-grader
+```
+
 ## 使用说明
 
 - **上传 PDF**：会自动渲染所有页
